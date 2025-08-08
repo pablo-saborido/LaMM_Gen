@@ -99,57 +99,7 @@ class LMM:
         self.sigma = sigma
 
         # ---Store latent samples---
-        # If user tries to use a built-in latent generator
-        if isinstance(Z, str):
-            # Check if the generator exists
-            try:
-                generator = LMM.Latent_dictionary[Z]
-            except KeyError:
-                raise ValueError(f"Unknown latent space '{Z}'. "
-                                 f"Available: {list(LMM.Latent_dictionary)}")
-            # The number of samples has to be provided
-            if n_latent is None:
-                raise ValueError("You must provide 'n_latent' when using a built-in latent space.")
-
-            # Now check that all the required arguemnts for the generator are provided
-
-            # First, inspect generator signature
-            sig = inspect.signature(generator)
-            # Parameters excluding the first 'n', already given by 'n_latent'
-            params = list(sig.parameters.values())[1:]
-            # Identify required parameter names
-            required = tuple(p.name for p in params if p.default is inspect.Parameter.empty)
-
-            # Normalise a single int into a singleton tuple
-            if isinstance(latent_params, int):
-                latent_params = (latent_params,)
-            # Normalise list into a tuple
-            elif isinstance(latent_params, list):
-                latent_params = tuple(latent_params)
-            # If latent_params is None we will have an empty tuple
-            elif latent_params is None:
-                latent_params = ()
-            # Reject anything else
-            elif not isinstance(latent_params, tuple):
-                raise TypeError(f"latent_params must be an int, list or tuple; got {type(latent_params).__name__}")
-
-            # Check that the user provided enough arguments
-            if len(latent_params) < len(required):
-                raise ValueError(
-                    f"Generator '{Z}' requires parameters {required}, got {latent_params}"
-                )
-
-            # Call generator with n_latent and provided args
-            self.Z = np.asarray(generator(n_latent, *latent_params))
-
-        # If user tries to provide a custom set of samples
-        else:
-            try:
-                # If Z is array-like
-                self.Z = np.asarray(Z)
-            except (TypeError, ValueError) as e:
-                raise TypeError("Z must be a string or array-like.") from e
-
+        self.Z = generate_latent_space(Z, n_latent=n_latent, latent_params=latent_params)
         self.n, self.d = self.Z.shape
 
         # ---Store the kernel---
@@ -192,6 +142,76 @@ class LMM:
 
         # Store the Cholesky factor L: K = L @ L.T
         self.L = cholesky(K, lower=True)
+    
+    @staticmethod
+    def generate_latent_space(Z, n_latent=None, latent_params=None):
+        """
+        Resolve `Z` into an (n,d) numpy array.
+        Arguments:
+            - Z (str or (n,d) array): latent space samples. If string, one of LMM.Latent_dictionary keys, else: custom latent 
+                                      samples whith n samples, each of which is a d-dimensional point.
+            - n_latent (int): number of samples in the latent space, required if Z is a built-in latent-space name.
+            - latent_params (tuple or None): parameters required by the built-in latent sample generator.
+        Returns:
+            - ndarray of shape (n, d).
+        """
+        # If user tries to use a built-in latent generator
+        if isinstance(Z, str):
+            # Check if the generator exists
+            try:
+                generator = LMM.Latent_dictionary[Z]
+            except KeyError:
+                raise ValueError(f"Unknown latent space '{Z}'. "
+                                 f"Available: {list(LMM.Latent_dictionary)}")
+            # The number of samples has to be provided
+            if n_latent is None:
+                raise ValueError("You must provide 'n_latent' when using a built-in latent space.")
+
+            # Now check that all the required arguemnts for the generator are provided
+
+            # First, inspect generator signature
+            sig = inspect.signature(generator)
+            # Parameters excluding the first 'n', already given by 'n_latent'
+            params = list(sig.parameters.values())[1:]
+            # Identify required parameter names
+            required = tuple(p.name for p in params if p.default is inspect.Parameter.empty)
+
+            # Normalise a single int into a singleton tuple
+            if isinstance(latent_params, int):
+                latent_params = (latent_params,)
+            # Normalise list into a tuple
+            elif isinstance(latent_params, list):
+                latent_params = tuple(latent_params)
+            # If latent_params is None we will have an empty tuple
+            elif latent_params is None:
+                latent_params = ()
+            # Reject anything else
+            elif not isinstance(latent_params, tuple):
+                raise TypeError(f"latent_params must be an int, list or tuple; got {type(latent_params).__name__}")
+
+            # Check that the user provided enough arguments
+            if len(latent_params) < len(required):
+                raise ValueError(
+                    f"Generator '{Z}' requires parameters {required}, got {latent_params}"
+                )
+
+            # Call generator with n_latent and provided args
+            return np.asarray(generator(n_latent, *latent_params))
+
+        # If user tries to provide a custom set of samples
+        else:
+            try:
+                # If Z is array-like
+                Z_arr = np.asarray(Z)
+            except (TypeError, ValueError) as e:
+                raise TypeError("Z must be a string or array-like.") from e
+            
+            # Check that the shape of the array is the one we expect
+            if Z_arr.ndim != 2:
+                raise ValueError("Custom latent samples must be 2D (n, d).")
+            
+            return Z_arr         
+
 
     def generate(self, n_features):
         """

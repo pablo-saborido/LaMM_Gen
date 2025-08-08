@@ -103,42 +103,7 @@ class LMM:
         self.n, self.d = self.Z.shape
 
         # ---Store the kernel---
-        if isinstance(covariance_kernel, str):
-            # If it's not a built-in kernel, raise error
-            if covariance_kernel not in LMM.Kernel_dictionary:
-                raise ValueError(
-                    f"Unknown kernel '{covariance_kernel}'. "
-                    f"Available: {list(LMM.Kernel_dictionary)}"
-                )
-            # If it's not a built-in kernel, raise error
-
-            if covariance_kernel == "random":
-                # Build a random positive definite matrix
-                A = np.random.randn(self.n, self.n)
-                K = A @ A.T # This is always positive definite
-                # Add terms in the diagonal to prevent numerical errors
-                K[np.diag_indices(self.n)] += eps * self.n
-                self.L = cholesky(K, lower=True)
-                return
-
-            # If it's in the predefined dictionary and is not random, just pick that function
-            self.kernel = LMM.Kernel_dictionary[covariance_kernel]
-
-        elif callable(covariance_kernel):
-            # If a function is provided just store it
-            self.kernel = covariance_kernel
-
-        else:
-            raise TypeError("covariance_kernel must be a string or a callable.")
-
-        # ---Build kernel matrix and factorise---
-        # If the kernel is not random, we still need to compute the kernel matrix K and its Cholesky decomposition
-        K = np.empty((self.n, self.n))
-        for i in range(self.n):
-            for j in range(self.n):
-                K[i, j] = self.kernel(self.Z[i], self.Z[j])
-        # Add terms in the diagonal to ensure positive definiteness and prevent numerical errors
-        K[np.diag_indices(self.n)] += eps
+        K = build_kernel(self, covariance_kernel, eps)
 
         # Store the Cholesky factor L: K = L @ L.T
         self.L = cholesky(K, lower=True)
@@ -146,7 +111,7 @@ class LMM:
     @staticmethod
     def generate_latent_space(Z, n_latent=None, latent_params=None):
         """
-        Resolve `Z` into an (n,d) numpy array.
+        Resolve Z into an (n,d) numpy array.
         Arguments:
             - Z (str or (n,d) array): latent space samples. If string, one of LMM.Latent_dictionary keys, else: custom latent 
                                       samples whith n samples, each of which is a d-dimensional point.
@@ -212,6 +177,53 @@ class LMM:
             
             return Z_arr         
 
+    def build_kernel(self, covariance_kernel, eps):
+        """
+        Resolve the kernel and compute the matrix for the given latent space.
+        Arguments:
+            - covariance_kernel (str or callable): if string, one of LMM.Kernel_dictionary keys, or a custom callable f(x,y)->float.
+            - eps (float): small value to add to the kernel matrix before Cholesky decomposition for numerical stability.
+        Returns:
+            - K ((n, n) array): Kernel matrix for the latent points, with K[i, j] = k(Z[i], Z[j]).
+        """
+        if isinstance(covariance_kernel, str):
+            # If it's not a built-in kernel, raise error
+            if covariance_kernel not in LMM.Kernel_dictionary:
+                raise ValueError(
+                    f"Unknown kernel '{covariance_kernel}'. "
+                    f"Available: {list(LMM.Kernel_dictionary)}"
+                )
+            # If it's not a built-in kernel, raise error
+
+            if covariance_kernel == "random":
+                # Build a random positive definite matrix
+                A = np.random.randn(self.n, self.n)
+                K = A @ A.T # This is always positive definite
+                # Add terms in the diagonal to ensure positive definiteness and to prevent numerical errors
+                K[np.diag_indices(self.n)] += eps * self.n
+                return K
+
+            # If it's in the predefined dictionary and is not random, just pick that function
+            self.kernel = LMM.Kernel_dictionary[covariance_kernel]
+
+        elif callable(covariance_kernel):
+            # If a function is provided just store it
+            self.kernel = covariance_kernel
+
+        else:
+            raise TypeError("covariance_kernel must be a string or a callable.")
+
+        # Build kernel matrix and factorise
+        # If the kernel is not random, we still need to compute the kernel matrix K and its Cholesky decomposition
+        K = np.empty((self.n, self.n))
+        for i in range(self.n):
+            Zi = self.Z[i]
+            for j in range(self.n):
+                K[i, j] = self.kernel(Zi, self.Z[j])
+        # Add terms in the diagonal to ensure positive definiteness and prevent numerical errors
+        K[np.diag_indices(self.n)] += eps
+
+        return K
 
     def generate(self, n_features):
         """

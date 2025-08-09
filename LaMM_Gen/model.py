@@ -97,13 +97,14 @@ class LMM:
         """
 
         self.sigma = sigma
+        self.eps = eps
 
         # Store latent samples
         self.Z = LMM.generate_latent_space(Z, n_latent=n_latent, latent_params=latent_params)
         self.n, self.d = self.Z.shape
 
         # Store the kernel
-        K = self.build_kernel(self, covariance_kernel, eps)
+        K = self.build_kernel(self, covariance_kernel)
 
         # Store the Cholesky factor L: K = L @ L.T
         self.L = cholesky(K, lower=True)
@@ -132,34 +133,10 @@ class LMM:
             if n_latent is None:
                 raise ValueError("You must provide 'n_latent' when using a built-in latent space.")
 
-            # Now check that all the required arguemnts for the generator are provided
-
-            # First, inspect generator signature
-            sig = inspect.signature(generator)
-            # Parameters excluding the first 'n', already given by 'n_latent'
-            params = list(sig.parameters.values())[1:]
-            # Identify required parameter names
-            required = tuple(p.name for p in params if p.default is inspect.Parameter.empty)
-
-            # Normalise a single int into a singleton tuple
-            if isinstance(latent_params, int):
-                latent_params = (latent_params,)
-            # Normalise list into a tuple
-            elif isinstance(latent_params, list):
-                latent_params = tuple(latent_params)
-            # If latent_params is None we will have an empty tuple
-            elif latent_params is None:
-                latent_params = ()
-            # Reject anything else
-            elif not isinstance(latent_params, tuple):
-                raise TypeError(f"latent_params must be an int, list or tuple; got {type(latent_params).__name__}")
-
-            # Check that the user provided enough arguments
-            if len(latent_params) < len(required):
-                raise ValueError(
-                    f"Generator '{Z}' requires parameters {required}, got {latent_params}"
-                )
-
+            # Now check that all the required arguemnts for the generator are provided, and 
+            # normalise latent_params to a tuple
+            latent_params = self._required_arguments_check(self, Z, generator, latent_params)
+            
             # Call generator with n_latent and provided args
             return np.asarray(generator(n_latent, *latent_params))
 
@@ -175,14 +152,46 @@ class LMM:
             if Z_arr.ndim != 2:
                 raise ValueError("Custom latent samples must be 2D (n, d).")
             
-            return Z_arr         
+            return Z_arr   
 
-    def build_kernel(self, covariance_kernel, eps):
+    def _required_arguments_check(self, Z, generator, latent_params):
+        """
+        Normalize latent_params to a tuple and verify it matches the generator's
+        required arguments. Raises TypeError or ValueError if invalid.
+        """
+        # First, inspect generator signature
+        sig = inspect.signature(generator)
+        # Parameters excluding the first 'n', already given by 'n_latent'
+        params = list(sig.parameters.values())[1:]
+        # Identify required parameter names
+        required = tuple(p.name for p in params if p.default is inspect.Parameter.empty)
+
+        # Normalise a single int into a singleton tuple
+        if isinstance(latent_params, int):
+            latent_params = (latent_params,)
+        # Normalise list into a tuple
+        elif isinstance(latent_params, list):
+            latent_params = tuple(latent_params)
+        # If latent_params is None we will have an empty tuple
+        elif latent_params is None:
+            latent_params = ()
+        # Reject anything else
+        elif not isinstance(latent_params, tuple):
+            raise TypeError(f"latent_params must be an int, list or tuple; got {type(latent_params).__name__}")
+
+        # Check that the user provided enough arguments
+        if len(latent_params) < len(required):
+            raise ValueError(
+                f"Generator '{Z}' requires parameters {required}, got {latent_params}"
+            )
+        
+        return latent_params
+
+    def build_kernel(self, covariance_kernel):
         """
         Resolve the kernel and compute the matrix for the given latent space.
         Arguments:
             - covariance_kernel (str or callable): if string, one of LMM.Kernel_dictionary keys, or a custom callable f(x,y)->float.
-            - eps (float): small value to add to the kernel matrix before Cholesky decomposition for numerical stability.
         Returns:
             - K ((n, n) array): Kernel matrix for the latent points, with K[i, j] = k(Z[i], Z[j]).
         """
@@ -193,14 +202,13 @@ class LMM:
                     f"Unknown kernel '{covariance_kernel}'. "
                     f"Available: {list(LMM.Kernel_dictionary)}"
                 )
-            # If it's not a built-in kernel, raise error
 
             if covariance_kernel == "random":
                 # Build a random positive definite matrix
                 A = np.random.randn(self.n, self.n)
                 K = A @ A.T # This is always positive definite
                 # Add terms in the diagonal to ensure positive definiteness and to prevent numerical errors
-                K[np.diag_indices(self.n)] += eps * self.n
+                K[np.diag_indices(self.n)] += self.eps * self.n
                 return K
 
             # If it's in the predefined dictionary and is not random, just pick that function
@@ -208,38 +216,73 @@ class LMM:
 
         elif callable(covariance_kernel):
             # If a function is provided, we will start by checking that it expects two inputs
-            sig = inspect.signature(covariance_kernel)
-
-            # Count only parameters that can be passed as positional, without default values
-            required_params = [
-                p for p in sig.parameters.values()
-                if p.default is inspect.Parameter.empty
-                and p.kind in (inspect.Parameter.POSITIONAL_ONLY,
-                            inspect.Parameter.POSITIONAL_OR_KEYWORD)
-            ]
-
-            if len(required_params) != 2:
-                raise ValueError(
-                    f"Custom kernel must accept exactly two required positional parameters, "
-                    f"got {len(required_params)}."
-                )
-
+            self._custom_kernel_check(covariance_kernel)
+            # If no error is raised in the check
             self.kernel = covariance_kernel
 
         else:
             raise TypeError("covariance_kernel must be a string or a callable.")
 
-        # Build kernel matrix and factorise
-        # If the kernel is not random, we still need to compute the kernel matrix K and its Cholesky decomposition
+        # If the kernel is not random, we still need to compute the kernel matrix K
+        K = self._build_matrix_from_kernel(self)
+
+        return K
+    
+    def _custom_kernel_check(self, covariance_kernel):
+        """
+        Check that a custom kernel is callable with exactly two required positional
+        arguments and returns a scalar (Python scalar or NumPy 0-d array) when given
+        two test vectors. Raises ValueError if the check fails.
+        """
+        sig = inspect.signature(covariance_kernel)
+
+        # Count only parameters that can be passed as positional, without default values
+        required_params = [
+            p for p in sig.parameters.values()
+            if p.default is inspect.Parameter.empty
+            and p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+
+        if len(required_params) != 2:
+            raise ValueError(
+                f"Custom kernel must accept exactly two required positional parameters, "
+                f"got {len(required_params)}."
+            )
+
+        # Check that the output is a scalar
+        try:
+            # small test vectors
+            dummy_x = np.zeros(2)   
+            dummy_y = np.ones(2)
+            result = covariance_kernel(dummy_x, dummy_y)
+        except Exception as e:
+            raise ValueError(f"Custom kernel raised an error on test inputs: {e}")
+
+        # Accept Python scalars or NumPy 0-d arrays
+        if np.isscalar(result) or (isinstance(result, np.ndarray) and result.shape == ()):
+            pass  
+        else:
+            raise ValueError(
+                f"Custom kernel must return a scalar, got type {type(result).__name__} "
+                f"with shape {getattr(result, 'shape', None)}."
+            )
+
+    def _build_matrix_from_kernel(self):
+        """
+        Build the n×n Gram matrix K using the current kernel and latent points Z,
+        adding eps to the diagonal for numerical stability. Returns K.
+        """
         K = np.empty((self.n, self.n))
         for i in range(self.n):
             Zi = self.Z[i]
             for j in range(self.n):
                 K[i, j] = self.kernel(Zi, self.Z[j])
         # Add terms in the diagonal to ensure positive definiteness and prevent numerical errors
-        K[np.diag_indices(self.n)] += eps
+        K[np.diag_indices(self.n)] += self.eps
 
         return K
+
 
     def generate(self, n_features):
         """
@@ -260,6 +303,23 @@ class LMM:
         else:
             self.Y = X
         return self.Y
+
+    def change_kernel(self, new_covariance_kernel, eps = self.eps):
+        """
+        Change the kernel, compute the matrix for the given latent space and update the Cholesky factor.
+        Arguments:
+            - new_covariance_kernel (str or callable): if string, one of LMM.Kernel_dictionary keys, or a custom callable f(x,y)->float.
+            - eps (float): small value to add to the kernel matrix before Cholesky decomposition for numerical stability.
+        """
+        self.eps = eps
+
+        # Recompute the kernel
+        K = self.build_kernel(self, covariance_kernel)
+
+        # Store the new Cholesky factor 
+        self.L = cholesky(K, lower=True)
+
+
 
     def plot_dataset(self):
         """

@@ -82,12 +82,12 @@ class LMM:
         # RBF, radial basis function: exp(−‖x−y‖²/2)
         "RBF": lambda x, y: np.exp(-0.5 * np.linalg.norm(x - y) ** 2),
         # random: random mxm positive definite matrix, only possible for latent spaces of dimension 0, with m possible elements.
-        "random": None, # The actual kernel will be computen in the __init__
+        "random": None, # The actual kernel will be computed in the __init__
     }
 
     def __init__(self, Z, covariance_kernel, sigma=0.0, eps=1e-8, n_latent=None, latent_params=None):
         """
-         - Z (str or (n,d) array): latent space samples. If string, one of LMM.Latent_dictionary keys, else: custom latent samples whith
+         - Z (str or (n,d) array): latent space samples. If string, one of LMM.Latent_dictionary keys, else: custom latent samples with
                                 n samples, each of which is a d-dimensional point.
          - covariance_kernel (str or callable): if string, one of LMM.Kernel_dictionary keys, or a custom callable f(x,y)->float.
          - sigma (float): standard deviation of the noise.
@@ -104,10 +104,13 @@ class LMM:
         self.n, self.d = self.Z.shape
 
         # Store the kernel
-        K = self.build_kernel(self, covariance_kernel)
+        K = self.build_kernel(covariance_kernel)
 
         # Store the Cholesky factor L: K = L @ L.T
         self.L = cholesky(K, lower=True)
+
+        # Initialise empty dataset, this will be updated when generate() is called
+        self.Y = None
     
     @staticmethod
     def generate_latent_space(Z, n_latent=None, latent_params=None):
@@ -115,7 +118,7 @@ class LMM:
         Resolve Z into an (n,d) numpy array.
         Arguments:
             - Z (str or (n,d) array): latent space samples. If string, one of LMM.Latent_dictionary keys, else: custom latent 
-                                      samples whith n samples, each of which is a d-dimensional point.
+                                      samples with n samples, each of which is a d-dimensional point.
             - n_latent (int): number of samples in the latent space, required if Z is a built-in latent-space name.
             - latent_params (tuple or None): parameters required by the built-in latent sample generator.
         Returns:
@@ -133,9 +136,9 @@ class LMM:
             if n_latent is None:
                 raise ValueError("You must provide 'n_latent' when using a built-in latent space.")
 
-            # Now check that all the required arguemnts for the generator are provided, and 
+            # Now check that all the required arguments for the generator are provided, and 
             # normalise latent_params to a tuple
-            latent_params = self._required_arguments_check(self, Z, generator, latent_params)
+            latent_params = LMM._required_arguments_check(Z, generator, latent_params)
             
             # Call generator with n_latent and provided args
             return np.asarray(generator(n_latent, *latent_params))
@@ -154,7 +157,8 @@ class LMM:
             
             return Z_arr   
 
-    def _required_arguments_check(self, Z, generator, latent_params):
+    @staticmethod
+    def _required_arguments_check(Z, generator, latent_params):
         """
         Normalize latent_params to a tuple and verify it matches the generator's
         required arguments. Raises TypeError or ValueError if invalid.
@@ -224,7 +228,7 @@ class LMM:
             raise TypeError("covariance_kernel must be a string or a callable.")
 
         # If the kernel is not random, we still need to compute the kernel matrix K
-        K = self._build_matrix_from_kernel(self)
+        K = self._build_matrix_from_kernel()
 
         return K
     
@@ -304,17 +308,19 @@ class LMM:
             self.Y = X
         return self.Y
 
-    def change_kernel(self, new_covariance_kernel, eps = self.eps):
+    def change_kernel(self, new_covariance_kernel, eps = None):
         """
         Change the kernel, compute the matrix for the given latent space and update the Cholesky factor.
         Arguments:
             - new_covariance_kernel (str or callable): if string, one of LMM.Kernel_dictionary keys, or a custom callable f(x,y)->float.
             - eps (float): small value to add to the kernel matrix before Cholesky decomposition for numerical stability.
         """
-        self.eps = eps
+        # If new eps is passed, update the attribute
+        if eps is not None: 
+            self.eps = eps
 
         # Recompute the kernel
-        K = self.build_kernel(self, covariance_kernel)
+        K = self.build_kernel(new_covariance_kernel)
 
         # Store the new Cholesky factor 
         self.L = cholesky(K, lower=True)
@@ -422,9 +428,9 @@ class LMM:
         Apply PCA (3 components) to the last generated dataset and plot the result.
         Only valid when the dataset has >3 features.
         """
-        if self._Y is None:
+        if self.Y is None:
             raise RuntimeError("No dataset generated yet; call generate() first.")
-        Y = self._Y
+        Y = self.Y
         n, p = Y.shape
 
         # check: only use PCA‐plot when p > 3

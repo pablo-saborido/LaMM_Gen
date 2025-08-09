@@ -98,12 +98,12 @@ class LMM:
 
         self.sigma = sigma
 
-        # ---Store latent samples---
-        self.Z = generate_latent_space(Z, n_latent=n_latent, latent_params=latent_params)
+        # Store latent samples
+        self.Z = LMM.generate_latent_space(Z, n_latent=n_latent, latent_params=latent_params)
         self.n, self.d = self.Z.shape
 
-        # ---Store the kernel---
-        K = build_kernel(self, covariance_kernel, eps)
+        # Store the kernel
+        K = self.build_kernel(self, covariance_kernel, eps)
 
         # Store the Cholesky factor L: K = L @ L.T
         self.L = cholesky(K, lower=True)

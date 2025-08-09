@@ -207,7 +207,23 @@ class LMM:
             self.kernel = LMM.Kernel_dictionary[covariance_kernel]
 
         elif callable(covariance_kernel):
-            # If a function is provided just store it
+            # If a function is provided, we will start by checking that it expects two inputs
+            sig = inspect.signature(covariance_kernel)
+
+            # Count only parameters that can be passed as positional, without default values
+            required_params = [
+                p for p in sig.parameters.values()
+                if p.default is inspect.Parameter.empty
+                and p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            ]
+
+            if len(required_params) != 2:
+                raise ValueError(
+                    f"Custom kernel must accept exactly two required positional parameters, "
+                    f"got {len(required_params)}."
+                )
+
             self.kernel = covariance_kernel
 
         else:
